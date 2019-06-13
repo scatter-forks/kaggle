@@ -1,0 +1,210 @@
+# 读取数据并输入函数
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+train = pd.read_csv(r'C:/Users/scatter/Desktop/titanic/train.csv')
+test = pd.read_csv(r'C:/Users/scatter/Desktop/titanic/test.csv')
+all_data = pd.concat([train, test], ignore_index = True)#将两个数据合并在一起进行分析
+
+
+# 新特征，将称呼分为六类
+all_data['Title'] = all_data['Name'].apply(lambda x:x.split(',')[1].split('.')[0].strip())
+Title_Dict = {}
+Title_Dict.update(dict.fromkeys(['Capt', 'Col', 'Major', 'Dr', 'Rev'], 'Officer'))
+Title_Dict.update(dict.fromkeys(['Don', 'Sir', 'the Countess', 'Dona', 'Lady'], 'Royalty'))
+Title_Dict.update(dict.fromkeys(['Mme', 'Ms', 'Mrs'], 'Mrs'))
+Title_Dict.update(dict.fromkeys(['Mlle', 'Miss'], 'Miss'))
+Title_Dict.update(dict.fromkeys(['Mr'], 'Mr'))
+Title_Dict.update(dict.fromkeys(['Master','Jonkheer'], 'Master'))
+all_data['Title'] = all_data['Title'].map(Title_Dict)
+print(all_data.head())
+sns.barplot(x="Title", y="Survived", data=all_data)
+
+
+# 新特征，家庭人口数
+all_data['FamilySize']=all_data['SibSp']+all_data['Parch']+1
+sns.barplot(x="FamilySize", y="Survived", data=all_data)
+
+
+#根据家庭人口数生存率的分布图，将人口数分为三类
+def Fam_label(s):
+    if (s >= 2) & (s <= 4):
+        return 2
+    elif ((s > 4) & (s <= 7)) | (s == 1):
+        return 1
+    elif (s > 7):
+        return 0
+all_data['FamilyLabel']=all_data['FamilySize'].apply(Fam_label)#使用函数更改键名
+sns.barplot(x="FamilyLabel", y="Survived", data=all_data)
+
+
+#根据甲板进行分类
+all_data['Cabin'] = all_data['Cabin'].fillna('Unknown')#缺失值暂时填充为Unknown
+all_data['Deck']=all_data['Cabin'].str.get(0)#新的一列，键为船舱名字的首字母get(0)
+# print((all_data['Ticket'][:10]))
+sns.barplot(x="Deck", y="Survived", data=all_data)
+
+
+#统计每个乘客的共票号数
+Ticket_Count = dict(all_data['Ticket'].value_counts())#每张票共票的名字和数量组成的字典
+all_data['TicketGroup'] = all_data['Ticket'].apply(lambda x:Ticket_Count[x])
+#数量只有1，2，3，4，5，6，7，8，11个，所以分好的类名就是这些数量的数值
+# print(np.unique(all_data['TicketGroup'] ))
+sns.barplot(x='TicketGroup', y='Survived', data=all_data)
+
+
+#同理，将这8个类根据存活率的大小分为三个大类0，1，2
+def Ticket_Label(s):
+    if (s >= 2) & (s <= 4):
+        return 2
+    elif ((s > 4) & (s <= 8)) | (s == 1):
+        return 1
+    elif (s > 8):
+        return 0
+all_data['TicketGroup'] = all_data['TicketGroup'].apply(Ticket_Label)
+sns.barplot(x='TicketGroup', y='Survived', data=all_data)
+
+
+#填补缺失的Age，使用Sex, Title, Pclass三个特征构建随机森林模型，填充年龄缺失值
+#Title是称呼，Pclass是阶级，Sex是性别
+from sklearn.ensemble import RandomForestRegressor
+age_df = all_data[['Age', 'Pclass','Sex','Title']]
+
+
+#进行哑编码
+age_df=pd.get_dummies(age_df)
+known_age = age_df[age_df.Age.notnull()].as_matrix()
+unknown_age = age_df[age_df.Age.isnull()].as_matrix()
+y = known_age[:, 0]#这个应该是只有年龄
+X = known_age[:, 1:]#这个应该是除了年龄所有的属性
+
+
+#random_state保证程序每次运行都分割一样的训练集和测试集,随机森林：100颗树，-1引擎允许使用处理器的数量无限制
+rfr = RandomForestRegressor(random_state=0, n_estimators=100, n_jobs=-1)
+rfr.fit(X, y)#用除了年龄的属性进行训练，求得年龄的模型
+# print(unknown_age)
+predictedAges = rfr.predict(unknown_age[:, 1:])
+#将训练好的数据填补进去
+all_data.loc[ (all_data.Age.isnull()), 'Age' ] = predictedAges #.loc是指以什么为索引
+
+
+#填补缺失的Embarked
+# all_data[all_data['Embarked'].isnull()]#此处看缺失的embarked数据特征
+all_data.groupby(by=["Pclass","Embarked"]).Fare.median()
+#由数据可以看出来，缺失的embarked的pclass和fare都是1和80，我们以pclass和fare进行中位数分析，
+#且embarked缺失的少，所以根据数据分析直观的填补C
+all_data['Embarked'] = all_data['Embarked'].fillna('C')#这里默认是将nan进行填补，非nan不填补
+
+
+#Fare的填补
+# all_data[all_data['Fare'].isnull()] #观察缺失数据的特点
+#下面的选取就类似于数据库
+fare=all_data[(all_data['Embarked'] == "S") & (all_data['Pclass'] == 3)].Fare.median()
+all_data['Fare']=all_data['Fare'].fillna(fare)
+
+
+#Cabin，因为其分类太多无规律，且上面已经将缺失的填补为Unknown，所以无需再次填补
+# print(np.unique(all_data['Cabin']))
+# print(len(all_data[(all_data['Cabin']=='Unknown')]))
+
+
+#此处是提取姓氏进行分组
+all_data['Surname']=all_data['Name'].apply(lambda x:x.split(',')[0].strip())#strip是将字符串\aa 转为aa，即无其他杂字符串
+Surname_Count = dict(all_data['Surname'].value_counts())
+all_data['FamilyGroup'] = all_data['Surname'].apply(lambda x:Surname_Count[x])
+Female_Child_Group=all_data.loc[(all_data['FamilyGroup']>=2) & ((all_data['Age']<=12) | (all_data['Sex']=='female'))]#妇女儿童
+Male_Adult_Group=all_data.loc[(all_data['FamilyGroup']>=2) & (all_data['Age']>12) & (all_data['Sex']=='male')]#成年男性
+
+
+#绝大部分女性和儿童组的平均存活率都为1或0，即同组的女性和儿童要么全部幸存，要么全部遇难。
+Female_Child=pd.DataFrame(Female_Child_Group.groupby('Surname')['Survived'].mean().value_counts())
+Female_Child.columns=['GroupCount']
+Female_Child
+
+
+#绝大部分成年男性组的平均存活率也为1或0。
+Male_Adult=pd.DataFrame(Male_Adult_Group.groupby('Surname')['Survived'].mean().value_counts())
+Male_Adult.columns=['GroupCount']
+Male_Adult
+
+
+#因为普遍规律是女性和儿童幸存率高，成年男性幸存较低，所以我们把不符合普遍规律的反常组选出来单独处理。
+#把女性和儿童组中幸存率为0的组设置为遇难组，把成年男性组中存活率为1的设置为幸存组，推测处于遇难组的
+#女性和儿童幸存的可能性较低，处于幸存组的成年男性幸存的可能性较高。
+Female_Child_Group=Female_Child_Group.groupby('Surname')['Survived'].mean()
+Dead_List=set(Female_Child_Group[Female_Child_Group.apply(lambda x:x==0)].index)
+print(Dead_List)
+Male_Adult_List=Male_Adult_Group.groupby('Surname')['Survived'].mean()
+Survived_List=set(Male_Adult_List[Male_Adult_List.apply(lambda x:x==1)].index)
+print(Survived_List)
+
+
+#为了使处于这两种反常组中的样本能够被正确分类，对测试集中处于反常组中的样本的Age，Title，Sex进行惩罚修改。
+train=all_data.loc[all_data['Survived'].notnull()]
+test=all_data.loc[all_data['Survived'].isnull()]
+test.loc[(test['Surname'].apply(lambda x:x in Dead_List)),'Sex'] = 'male'
+test.loc[(test['Surname'].apply(lambda x:x in Dead_List)),'Age'] = 60
+test.loc[(test['Surname'].apply(lambda x:x in Dead_List)),'Title'] = 'Mr'
+test.loc[(test['Surname'].apply(lambda x:x in Survived_List)),'Sex'] = 'female'
+test.loc[(test['Surname'].apply(lambda x:x in Survived_List)),'Age'] = 5
+test.loc[(test['Surname'].apply(lambda x:x in Survived_List)),'Title'] = 'Miss'
+
+
+#选取特征，转换为数值变量，划分训练集和测试集。
+all_data=pd.concat([train, test])#类似于总分总
+all_data=all_data[['Survived','Pclass','Sex','Age','Fare','Embarked','Title','FamilyLabel','Deck','TicketGroup']]
+all_data=pd.get_dummies(all_data)#哑编码
+train=all_data[all_data['Survived'].notnull()]#选出处理好数据的训练集
+test=all_data[all_data['Survived'].isnull()].drop('Survived',axis=1)#删选测试集并把Survived列删除
+#这两个参数就是训练数据
+X = train.as_matrix()[:,1:]
+y = train.as_matrix()[:,0]
+
+
+#用网格搜索自动化选取最优参数
+#模型采用的是随机森林进行拟合
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.feature_selection import SelectKBest
+
+
+ #python的管道机制，里面有学习的模型
+#数据预处理过滤式特征选取SelectKBest模型，k是所选择的topK个特征
+pipe=Pipeline([('select',SelectKBest(k=20)),
+               #max_fea表示划分时最多考虑N−−√N个特征，random_state 是随机种子数
+               ('classify', RandomForestClassifier(random_state = 10, max_features = 'sqrt'))])
+
+param_test = {'classify__n_estimators':list(range(20,50,2)), 
+              'classify__max_depth':list(range(3,60,3))}#随机森林参数的范围
+
+
+#Python超参数自动搜索模块
+#设置学习模型，模型参数选取的范围，cv是整数或者交叉验证生成器或一个可迭代器，得出不同的参数组合模型
+gsearch = GridSearchCV(estimator = pipe, param_grid = param_test, scoring='roc_auc', cv=10)
+#用不同的参数组合进行拟合，选出最佳的参数
+gsearch.fit(X,y)
+print(gsearch.best_params_, gsearch.best_score_)
+
+
+#进行模型的训练
+from sklearn.pipeline import make_pipeline
+select = SelectKBest(k = 20)#选出最好的前20个特征
+#设置学习模型的参数
+clf = RandomForestClassifier(random_state = 10, warm_start = True, 
+                                  n_estimators = 26,
+                                  max_depth = 6, 
+                                  max_features = 'sqrt')
+#make_pipeline是pipeline的简单实现，只需传入每个step的函数名即可，不需要也不允许自己命名，自动转化为小写
+pipeline = make_pipeline(select, clf)
+pipeline.fit(X, y)
+
+
+#进行预测
+predictions = pipeline.predict(test)
+print(test.index)
+submission = pd.DataFrame({"PassengerId":test.index+1, "Survived": predictions.astype(np.int32)})
+submission.to_csv(r'C:/Users/scatter/Desktop/titanic/submission.csv', index=False)
